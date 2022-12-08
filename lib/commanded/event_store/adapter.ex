@@ -63,7 +63,27 @@ defmodule Commanded.EventStore.Adapter do
               :ok | {:error, error}
 
   @doc """
+  Same as `subscribe/2` but passes additional options to the event store.
+  """
+  @callback subscribe(adapter_meta, stream_uuid | :all, options) ::
+              :ok | {:error, error}
+
+  @doc """
   Create a persistent subscription to an event stream.
+  """
+  @callback subscribe_to(
+              adapter_meta,
+              stream_uuid | :all,
+              subscription_name,
+              subscriber,
+              start_from
+            ) ::
+              {:ok, subscription}
+              | {:error, :subscription_already_exists}
+              | {:error, error}
+
+  @doc """
+  Same as `subscribe_to/5` but passes additional options to the event store.
   """
   @callback subscribe_to(
               adapter_meta,
@@ -117,4 +137,6 @@ defmodule Commanded.EventStore.Adapter do
   """
   @callback delete_snapshot(adapter_meta, source_uuid) ::
               :ok | {:error, error}
+
+  @optional_callbacks [subscribe_to: 6, subscribe: 3]
 end
