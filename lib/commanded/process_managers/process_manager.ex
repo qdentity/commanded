@@ -60,9 +60,12 @@ defmodule Commanded.ProcessManagers.ProcessManager do
   manager module and implement the callback functions defined in the behaviour:
 
   - `c:interested?/1`
+  - `c:interested?/2`
   - `c:handle/2`
+  - `c:handle/3`
   - `c:apply/2`
   - `c:after_command/2`
+  - `c:after_command/3`
   - `c:error/3`
 
   Please read the [Process managers](process-managers.html) guide for more
@@ -78,6 +81,7 @@ defmodule Commanded.ProcessManagers.ProcessManager do
         defstruct []
 
         def interested?(%AnEvent{uuid: uuid}), do: {:start, uuid}
+        def interested?(%AnAnotherEvent{uuid: uuid}, _metadata), do: {:start, uuid}
 
         def handle(%ExampleProcessManager{}, %ExampleEvent{}) do
           [
@@ -85,8 +89,18 @@ defmodule Commanded.ProcessManagers.ProcessManager do
           ]
         end
 
+        def handle(%ExampleProcessManager{}, %AnotherExampleEvent{}, _metadata) do
+          [
+            %AnotherExampleCommand{}
+          ]
+        end
+
         def after_command(%ExampleProcessManager{}, %ExampleCommand{}) do
           :stop
+        end
+
+        def after_command(%ExampleProcessManager{}, %AnotherExampleCommand{}, _metadata) do
+          :continue
         end
 
         def error({:error, failure}, %ExampleEvent{}, _failure_context) do
@@ -279,9 +293,11 @@ defmodule Commanded.ProcessManagers.ProcessManager do
 
   """
 
+  alias Commanded.EventStore.RecordedEvent
   alias Commanded.ProcessManagers.FailureContext
 
   @type domain_event :: struct
+  @type enriched_metadata :: RecordedEvent.enriched_metadata()
   @type command :: struct
   @type process_manager :: struct
   @type process_uuid :: String.t() | [String.t()]
@@ -299,8 +315,23 @@ defmodule Commanded.ProcessManagers.ProcessManager do
   @doc """
   Is the process manager interested in the given command?
 
-  The `c:interested?/1` function is used to indicate which events the process
-  manager receives. The response is used to route the event to an existing
+  Version without metadata access.
+
+  See `c:interested?/2` for details.
+  """
+  @callback interested?(domain_event) ::
+              {:start, process_uuid}
+              | {:start!, process_uuid}
+              | {:continue, process_uuid}
+              | {:continue!, process_uuid}
+              | {:stop, process_uuid}
+              | false
+
+  @doc """
+  Is the process manager interested in the given command?
+
+  The `c:interested?/2` function is used to indicate which events
+  the process manager receives. The response is used to route the event to an existing
   instance or start a new process instance:
 
   - `{:start, process_uuid}` - create a new instance of the process manager.
@@ -331,7 +362,7 @@ defmodule Commanded.ProcessManagers.ProcessManager do
   problematic event.
 
   """
-  @callback interested?(domain_event) ::
+  @callback interested?(domain_event, enriched_metadata) ::
               {:start, process_uuid}
               | {:start!, process_uuid}
               | {:continue, process_uuid}
@@ -343,37 +374,67 @@ defmodule Commanded.ProcessManagers.ProcessManager do
   Stop the process manager instance after a command is successfully
   dispatched.
 
-  The `c:after_command/2` function can be omitted if you do not need to stop
-  after a specific command or if you would instead use the `c:interested?/1`
-  stop mechanism.
+  version without metadata access
+
+  See `c:after_command/3` for details.
   """
   @callback after_command(process_manager, domain_event) :: :continue | :stop
+
+  @doc """
+  Stop the process manager instance after a command is successfully
+  dispatched.
+
+  The `c:after_command/3` function can be omitted if you do not need to stop
+  after a specific command or if you would instead use the `c:interested?/2`
+  stop mechanism.
+  """
+  @callback after_command(process_manager, domain_event, enriched_metadata) :: :continue | :stop
 
   @doc """
   Process manager instance handles a domain event, returning any commands to
   dispatch.
 
-  A `c:handle/2` function can be defined for each `:start` and `:continue`
-  tagged event previously specified. It receives the process manager's state and
-  the event to be handled. It must return the commands to be dispatched. This
-  may be none, a single command, or many commands.
+  Version without metadata access.
 
-  The `c:handle/2` function can be omitted if you do not need to dispatch a
-  command and are only mutating the process manager's state.
+  Check `c:handle/3` function for details.
   """
   @callback handle(process_manager, domain_event) :: command | list(command) | {:error, term}
 
   @doc """
+  Process manager instance handles a domain event, returning any commands to
+  dispatch.
+
+  A `c:handle/3` function can be defined for each `:start` and `:continue`
+  tagged event previously specified. It receives the process manager's state and
+  the event to be handled. It must return the commands to be dispatched. This
+  may be none, a single command, or many commands.
+
+  The `c:handle/3` function can be omitted if you do not need to dispatch a
+  command and are only mutating the process manager's state.
+  """
+  @callback handle(process_manager, domain_event, enriched_metadata) ::
+              command | list(command) | {:error, term}
+
+  @doc """
   Mutate the process manager's state by applying the domain event.
 
-  The `c:apply/2` function is used to mutate the process manager's state. It
-  receives the current state and the domain event, and must return the modified
-  state.
+  Version without metadata access.
+
+  Check `c:apply/3` function for details.
+  """
+  @callback apply(process_manager, domain_event) :: process_manager
+
+  @doc """
+  Mutate the process manager's state by applying the domain event.
+
+  The `c:apply/3` function is used to mutate the process manager's state. It
+  receives the current state, the domain event and the event metadata, and must
+  return the modified state.
 
   This callback function is optional, the default behaviour is to retain the
   process manager's current state.
   """
-  @callback apply(process_manager, domain_event) :: process_manager
+  @callback apply(process_manager, domain_event, enriched_metadata) :: process_manager
 
   @doc """
   Called when a command dispatch or event handling returns an error.
@@ -438,7 +499,16 @@ defmodule Commanded.ProcessManagers.ProcessManager do
               | {:skip, :continue_pending}
               | {:stop, reason :: term()}
 
-  @optional_callbacks init: 1, handle: 2, apply: 2, error: 3, interested?: 1, after_command: 2
+  @optional_callbacks init: 1,
+                      handle: 2,
+                      handle: 3,
+                      apply: 2,
+                      apply: 3,
+                      error: 3,
+                      interested?: 1,
+                      interested?: 2,
+                      after_command: 2,
+                      after_command: 3
 
   alias Commanded.ProcessManagers.ProcessManager
   alias Commanded.ProcessManagers.ProcessRouter
@@ -491,13 +561,29 @@ defmodule Commanded.ProcessManagers.ProcessManager do
     # Include default fallback functions at end, with lowest precedence
     quote generated: true do
       @doc false
+      def after_command(process_manager, event, _metadata),
+        do: after_command(process_manager, event)
+
+      @doc false
       def after_command(_process_manager, _event), do: :continue
+
+      # @doc false
+      def interested?(event, _metadata),
+        do: interested?(event)
 
       @doc false
       def interested?(_event), do: false
 
       @doc false
+      def handle(process_manager, event, _metadata),
+        do: handle(process_manager, event)
+
+      @doc false
       def handle(_process_manager, _event), do: []
+
+      @doc false
+      def apply(process_manager, event, _metadata),
+        do: __MODULE__.apply(process_manager, event)
 
       @doc false
       def apply(process_manager, _event), do: process_manager
@@ -520,7 +606,7 @@ defmodule Commanded.ProcessManagers.ProcessManager do
           application: MyApp.Application,
           name: __MODULE__
 
-        def interested?(%ProcessStarted{uuids: uuids}), do: {:start, uuids}
+        def interested?(%ProcessStarted{uuids: uuids}, _metadata), do: {:start, uuids}
 
         def handle(%IdentityProcessManager{}, %ProcessStarted{} = event) do
           # Identify which uuid is associated with the current instance from the
